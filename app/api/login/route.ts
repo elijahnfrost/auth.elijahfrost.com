@@ -2,46 +2,30 @@ import { NextResponse } from "next/server";
 import {
   COOKIE_MAX_AGE_SECONDS,
   COOKIE_NAME,
+  COOKIE_SCOPE_NAME,
   constantTimeEqualHex,
   sha256Hex,
 } from "@/lib/cookie";
 import { sanitizeNext } from "@/lib/next-url";
+import { loadCodes } from "@/lib/config";
+import type { GrantableScope } from "@/lib/scopes";
 
 export const runtime = "edge";
 
-const PASSWORD_ENV_KEYS = [
-  "SHARED_PASSWORD_EASY",
-  "SHARED_PASSWORD_STRONG_1",
-  "SHARED_PASSWORD_STRONG_2",
-] as const;
-
-function configuredPasswords(): string[] {
-  return PASSWORD_ENV_KEYS.map((k) => process.env[k]).filter(
-    (v): v is string => typeof v === "string" && v.length > 0
-  );
-}
-
 export async function POST(req: Request) {
-  const candidates = configuredPasswords();
-  if (candidates.length === 0) {
-    return new NextResponse(
-      "Server misconfigured: no SHARED_PASSWORD_* env vars set.",
-      { status: 500 }
-    );
-  }
-
   const form = await req.formData();
   const submitted = String(form.get("password") ?? "");
   const nextParam = String(form.get("next") ?? "");
   const next = sanitizeNext(nextParam);
 
   const submittedHash = await sha256Hex(submitted);
-  const candidateHashes = await Promise.all(candidates.map(sha256Hex));
-  // Walk every candidate; do not short-circuit so timing reveals nothing
-  // about which slot (if any) matched.
-  let matched = false;
-  for (const h of candidateHashes) {
-    if (constantTimeEqualHex(submittedHash, h)) matched = true;
+  const { codes } = await loadCodes();
+
+  // Walk every entry; do not short-circuit so timing reveals nothing about
+  // which slot (if any) matched.
+  let matched: GrantableScope | null = null;
+  for (const [hash, entry] of Object.entries(codes)) {
+    if (constantTimeEqualHex(submittedHash, hash)) matched = entry.scope;
   }
 
   if (!matched) {
@@ -51,9 +35,8 @@ export async function POST(req: Request) {
     return NextResponse.redirect(back, { status: 303 });
   }
 
-  // Cookie value is the hash of whichever password the visitor actually used.
-  // The Worker accepts the cookie if it matches any of the three configured
-  // password hashes, so all three remain interchangeable.
+  // Cookie value is the hash of whichever password the visitor used. The
+  // Worker looks the cookie up in the codes map to determine effective scope.
   const res = NextResponse.redirect(next, { status: 303 });
   res.cookies.set({
     name: COOKIE_NAME,
@@ -61,6 +44,18 @@ export async function POST(req: Request) {
     domain: ".elijahfrost.com",
     path: "/",
     httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    maxAge: COOKIE_MAX_AGE_SECONDS,
+  });
+  // Advisory: lets frontends flip read-only UI without a server round-trip.
+  // Real enforcement lives at the edge.
+  res.cookies.set({
+    name: COOKIE_SCOPE_NAME,
+    value: matched,
+    domain: ".elijahfrost.com",
+    path: "/",
+    httpOnly: false,
     secure: true,
     sameSite: "lax",
     maxAge: COOKIE_MAX_AGE_SECONDS,
