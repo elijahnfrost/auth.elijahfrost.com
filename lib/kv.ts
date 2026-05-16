@@ -50,3 +50,14 @@ export async function kvPut(key: string, value: string): Promise<void> {
   });
   if (!res.ok) throw new Error(`kvPut(${key}) failed: ${res.status}`);
 }
+
+export async function kvDelete(key: string): Promise<void> {
+  const res = await fetch(namespaceUrl(key), {
+    method: "DELETE",
+    headers: authHeader(),
+    cache: "no-store",
+  });
+  // 404 means the key is already gone — treat as success for idempotency.
+  if (res.status === 404) return;
+  if (!res.ok) throw new Error(`kvDelete(${key}) failed: ${res.status}`);
+}

@@ -2,13 +2,52 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { COOKIE_NAME } from "@/lib/cookie";
 import { loadCodes, loadPolicy, scopeForCookieValue } from "@/lib/config";
-import { GATED_SUBDOMAINS } from "@/lib/scopes";
-import { AdminClient } from "./AdminClient";
+import { APEX, listVercelSubdomains } from "@/lib/cloudflare-admin";
+import { findProjectIdForDomain, listProjects } from "@/lib/vercel";
+import { AdminClient, ProjectRow } from "./AdminClient";
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 const AUTH_ORIGIN = "https://auth.elijahfrost.com";
+
+async function loadProjectRows(): Promise<{ rows: ProjectRow[] | null; error: string | null }> {
+  try {
+    const [records, projects] = await Promise.all([listVercelSubdomains(), listProjects()]);
+    const projectsById = new Map(projects.map((p) => [p.id, p.name]));
+    const rows = await Promise.all(
+      records.map(async (r): Promise<ProjectRow> => {
+        const subdomain = r.name.replace(new RegExp(`\\.${APEX.replace(/\./g, "\\.")}$`), "");
+        const [projectId, policy] = await Promise.all([
+          findProjectIdForDomain(r.name),
+          loadPolicy(subdomain),
+        ]);
+        return {
+          subdomain,
+          fullName: r.name,
+          dnsRecordId: r.id,
+          dnsTarget: r.content,
+          vercelProjectId: projectId,
+          vercelProjectName: projectId ? (projectsById.get(projectId) ?? null) : null,
+          policy,
+        };
+      }),
+    );
+    rows.sort((a, b) => a.subdomain.localeCompare(b.subdomain));
+    return { rows, error: null };
+  } catch (e) {
+    return { rows: null, error: (e as Error).message };
+  }
+}
+
+async function loadVercelProjectsSafe(): Promise<{ projects: { id: string; name: string }[] | null }> {
+  try {
+    const projects = await listProjects();
+    return { projects };
+  } catch {
+    return { projects: null };
+  }
+}
 
 export default async function AdminPage() {
   const jar = await cookies();
@@ -20,15 +59,11 @@ export default async function AdminPage() {
     redirect(`/?next=${next}`);
   }
 
-  const [codesResult, policyEntries] = await Promise.all([
+  const [codesResult, projectsResult, vercelProjectsResult] = await Promise.all([
     loadCodes(),
-    Promise.all(
-      GATED_SUBDOMAINS.map(async (sub) => [sub, await loadPolicy(sub)] as const)
-    ),
+    loadProjectRows(),
+    loadVercelProjectsSafe(),
   ]);
-
-  const policies = Object.fromEntries(policyEntries);
-  const codes = codesResult.codes;
 
   return (
     <main
@@ -76,7 +111,12 @@ export default async function AdminPage() {
         auth.elijahfrost.com
       </p>
 
-      <AdminClient initialPolicies={policies} initialCodes={codes} />
+      <AdminClient
+        initialProjects={projectsResult.rows}
+        projectsError={projectsResult.error}
+        initialVercelProjects={vercelProjectsResult.projects}
+        initialCodes={codesResult.codes}
+      />
     </main>
   );
 }

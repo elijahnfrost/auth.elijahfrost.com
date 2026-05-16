@@ -24,13 +24,11 @@ export async function POST(req: Request) {
   }
 
   const hash = await sha256Hex(password);
-  // Source is whatever loadCodes returns; if it came from the env-var
-  // fallback, persisting a new code into KV implicitly starts the migration
-  // from env vars to KV. That's fine: env vars stay as a fallback.
   const { codes } = await loadCodes();
   codes[hash] = {
     scope,
     label: typeof label === "string" && label.length > 0 ? label : undefined,
+    password,
   };
   await saveCodes(codes);
 

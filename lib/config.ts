@@ -6,7 +6,7 @@
 // on unavailable config and the Vercel app does the same for any path that
 // strictly requires a codes lookup.
 
-import { kvGet, kvPut } from "./kv";
+import { kvDelete, kvGet, kvPut } from "./kv";
 import {
   CodesMap,
   GrantableScope,
@@ -24,11 +24,12 @@ function normalizeCodes(raw: unknown): CodesMap {
   for (const [hash, entry] of Object.entries(raw as Record<string, unknown>)) {
     if (!/^[0-9a-f]{64}$/.test(hash)) continue;
     if (!entry || typeof entry !== "object") continue;
-    const e = entry as { scope?: unknown; label?: unknown };
+    const e = entry as { scope?: unknown; label?: unknown; password?: unknown };
     if (!isGrantableScope(e.scope)) continue;
     out[hash] = {
       scope: e.scope,
       label: typeof e.label === "string" ? e.label : undefined,
+      password: typeof e.password === "string" && e.password.length > 0 ? e.password : undefined,
     };
   }
   return out;
@@ -76,6 +77,10 @@ export async function loadPolicy(subdomain: string): Promise<Policy> {
 export async function savePolicy(subdomain: string, policy: Policy): Promise<void> {
   if (!POLICIES.includes(policy)) throw new Error(`invalid policy: ${policy}`);
   await kvPut(`policy:${subdomain}`, policy);
+}
+
+export async function deletePolicy(subdomain: string): Promise<void> {
+  await kvDelete(`policy:${subdomain}`);
 }
 
 /**
