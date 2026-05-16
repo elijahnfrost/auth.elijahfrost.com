@@ -28,6 +28,7 @@ export default async function AdminPage() {
   ]);
 
   const policies = Object.fromEntries(policyEntries);
+  const codes = codesResult.codes;
 
   return (
     <main
@@ -72,10 +73,10 @@ export default async function AdminPage() {
           color: "var(--color-fg-muted)",
         }}
       >
-        auth.elijahfrost.com{codesResult.source === "fallback" ? " · codes from env fallback" : ""}
+        auth.elijahfrost.com
       </p>
 
-      <AdminClient initialPolicies={policies} initialCodes={codesResult.codes} />
+      <AdminClient initialPolicies={policies} initialCodes={codes} />
     </main>
   );
 }

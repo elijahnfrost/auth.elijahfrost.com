@@ -1,6 +1,10 @@
-// High-level config accessors. KV is the source of truth; the
-// SHARED_PASSWORD_* env vars remain as a safety fallback while we verify
-// the new system end-to-end. After verification they can be deleted.
+// High-level config accessors. KV is the sole source of truth.
+//
+// Failure to read the codes map is propagated as ConfigUnavailableError so
+// callers can decide whether to 503 (gated traffic) or surface a softer
+// error (login form). There is no env-var fallback; the Worker fails closed
+// on unavailable config and the Vercel app does the same for any path that
+// strictly requires a codes lookup.
 
 import { kvGet, kvPut } from "./kv";
 import {
@@ -11,13 +15,8 @@ import {
   isGrantableScope,
   isPolicy,
 } from "./scopes";
-import { sha256Hex } from "./cookie";
 
-const FALLBACK_PASSWORD_KEYS = [
-  "SHARED_PASSWORD_EASY",
-  "SHARED_PASSWORD_STRONG_1",
-  "SHARED_PASSWORD_STRONG_2",
-] as const;
+export class ConfigUnavailableError extends Error {}
 
 function normalizeCodes(raw: unknown): CodesMap {
   if (!raw || typeof raw !== "object") return {};
@@ -35,35 +34,28 @@ function normalizeCodes(raw: unknown): CodesMap {
   return out;
 }
 
-async function fallbackCodes(): Promise<CodesMap> {
-  const out: CodesMap = {};
-  for (const k of FALLBACK_PASSWORD_KEYS) {
-    const v = process.env[k];
-    if (typeof v !== "string" || v.length === 0) continue;
-    const h = await sha256Hex(v);
-    // Env-var passwords match the Worker's fallback behavior: admin scope.
-    out[h] = { scope: "admin", label: "env fallback" };
-  }
-  return out;
-}
-
 /**
- * Load the codes map. Returns the KV map if present and non-empty, otherwise
- * derives a map from SHARED_PASSWORD_* env vars (all granted admin) so the
- * system stays usable during the migration window.
+ * Load the codes map from KV. Throws ConfigUnavailableError if KV is
+ * unreachable, the `codes` key is missing, or its body is not a JSON object.
  */
-export async function loadCodes(): Promise<{ codes: CodesMap; source: "kv" | "fallback" }> {
+export async function loadCodes(): Promise<{ codes: CodesMap }> {
+  let raw: string | null;
   try {
-    const raw = await kvGet("codes");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const map = normalizeCodes(parsed);
-      if (Object.keys(map).length > 0) return { codes: map, source: "kv" };
-    }
-  } catch {
-    // fall through
+    raw = await kvGet("codes");
+  } catch (e) {
+    throw new ConfigUnavailableError(`kv read failed: ${(e as Error).message}`);
   }
-  return { codes: await fallbackCodes(), source: "fallback" };
+  if (raw == null) throw new ConfigUnavailableError("codes key missing");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new ConfigUnavailableError(`codes JSON parse failed: ${(e as Error).message}`);
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new ConfigUnavailableError("codes JSON is not an object");
+  }
+  return { codes: normalizeCodes(parsed) };
 }
 
 export async function saveCodes(map: CodesMap): Promise<void> {
@@ -75,7 +67,8 @@ export async function loadPolicy(subdomain: string): Promise<Policy> {
     const raw = await kvGet(`policy:${subdomain}`);
     if (raw && isPolicy(raw)) return raw;
   } catch {
-    // fall through
+    // A missing specific policy is benign; a transient KV error here
+    // shouldn't take down /admin rendering.
   }
   return "gated";
 }
@@ -87,11 +80,16 @@ export async function savePolicy(subdomain: string, policy: Policy): Promise<voi
 
 /**
  * Look up the scope granted by a cookie value (which is itself a SHA-256 hex
- * digest of the submitted password).
+ * digest of the submitted password). Returns "none" on any failure so that
+ * a transient KV outage cannot grant access, only deny it.
  */
 export async function scopeForCookieValue(cookieValue: string | null | undefined): Promise<GrantableScope | "none"> {
   if (!cookieValue || !/^[0-9a-f]{64}$/.test(cookieValue)) return "none";
-  const { codes } = await loadCodes();
-  const entry = codes[cookieValue];
-  return entry ? entry.scope : "none";
+  try {
+    const { codes } = await loadCodes();
+    const entry = codes[cookieValue];
+    return entry ? entry.scope : "none";
+  } catch {
+    return "none";
+  }
 }
