@@ -1,4 +1,8 @@
 export const COOKIE_NAME = "ef_auth";
+// Advisory companion cookie: not HttpOnly so frontends can read it via
+// document.cookie to flip UI affordances. All real enforcement is at the
+// edge (the Worker), so this cookie carrying "admin" doesn't grant access.
+export const COOKIE_SCOPE_NAME = "ef_scope";
 export const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 /** Hex SHA-256 digest. Used for both the cookie value and constant-time
