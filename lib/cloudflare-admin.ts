@@ -10,7 +10,15 @@
 
 const API_BASE = "https://api.cloudflare.com/client/v4";
 export const APEX = "elijahfrost.com";
-export const VERCEL_CNAME_TARGETS = new Set(["cname.vercel-dns.com"]);
+
+// Vercel's recommended CNAME target is `cname.vercel-dns.com`, but newly-
+// added domains are increasingly resolved to per-domain hashes under
+// `*.vercel-dns-NNN.com` (Vercel's hashed regional pool). Either form
+// counts as a Vercel-attached subdomain for our purposes.
+const VERCEL_CNAME_RE = /(^|\.)vercel-dns(-\d+)?\.com$/i;
+function isVercelCname(target: string): boolean {
+  return VERCEL_CNAME_RE.test(target.trim());
+}
 
 function envOrThrow(name: string): string {
   const v = process.env[name];
@@ -67,7 +75,7 @@ export async function listVercelSubdomains(): Promise<DnsRecord[]> {
       const suffix = "." + APEX;
       if (!r.name.endsWith(suffix)) continue;
       if (r.name === APEX) continue;
-      if (!VERCEL_CNAME_TARGETS.has(r.content) && !r.content.endsWith(".vercel-dns.com")) continue;
+      if (!isVercelCname(r.content)) continue;
       records.push(r);
     }
     const totalPages = json.result_info?.total_pages ?? 1;
