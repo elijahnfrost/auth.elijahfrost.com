@@ -1,0 +1,13 @@
+@import "@elijahfrost/design-system/tokens.css";
+@import "@elijahfrost/design-system/components.css";
+
+html, body {
+  background: var(--color-bg-page);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
