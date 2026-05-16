@@ -1,5 +1,5 @@
 import { isAdmin, notAdminResponse } from "@/lib/admin-auth";
-import { findProjectIdForDomain, listProjects } from "@/lib/vercel";
+import { buildDomainToProjectMap, listProjects } from "@/lib/vercel";
 import { APEX, listVercelSubdomains } from "@/lib/cloudflare-admin";
 import { loadPolicy } from "@/lib/config";
 
@@ -18,16 +18,18 @@ export interface ProjectRow {
 export async function GET() {
   if (!(await isAdmin())) return notAdminResponse();
 
-  const [records, projects] = await Promise.all([listVercelSubdomains(), listProjects()]);
+  const [records, projects, domainMap] = await Promise.all([
+    listVercelSubdomains(),
+    listProjects(),
+    buildDomainToProjectMap(),
+  ]);
   const projectsById = new Map(projects.map((p) => [p.id, p.name]));
 
   const rows: ProjectRow[] = await Promise.all(
     records.map(async (r) => {
       const subdomain = r.name.replace(new RegExp(`\\.${APEX.replace(/\./g, "\\.")}$`), "");
-      const [projectId, policy] = await Promise.all([
-        findProjectIdForDomain(r.name),
-        loadPolicy(subdomain),
-      ]);
+      const projectId = domainMap.get(r.name) ?? null;
+      const policy = await loadPolicy(subdomain);
       return {
         subdomain,
         fullName: r.name,

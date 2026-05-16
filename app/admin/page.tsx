@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { COOKIE_NAME } from "@/lib/cookie";
 import { loadCodes, loadPolicy, scopeForCookieValue } from "@/lib/config";
 import { APEX, listVercelSubdomains } from "@/lib/cloudflare-admin";
-import { findProjectIdForDomain, listProjects } from "@/lib/vercel";
+import { buildDomainToProjectMap, listProjects } from "@/lib/vercel";
 import { AdminClient, ProjectRow } from "./AdminClient";
 
 export const runtime = "edge";
@@ -13,15 +13,17 @@ const AUTH_ORIGIN = "https://auth.elijahfrost.com";
 
 async function loadProjectRows(): Promise<{ rows: ProjectRow[] | null; error: string | null }> {
   try {
-    const [records, projects] = await Promise.all([listVercelSubdomains(), listProjects()]);
+    const [records, projects, domainMap] = await Promise.all([
+      listVercelSubdomains(),
+      listProjects(),
+      buildDomainToProjectMap(),
+    ]);
     const projectsById = new Map(projects.map((p) => [p.id, p.name]));
     const rows = await Promise.all(
       records.map(async (r): Promise<ProjectRow> => {
         const subdomain = r.name.replace(new RegExp(`\\.${APEX.replace(/\./g, "\\.")}$`), "");
-        const [projectId, policy] = await Promise.all([
-          findProjectIdForDomain(r.name),
-          loadPolicy(subdomain),
-        ]);
+        const projectId = domainMap.get(r.name) ?? null;
+        const policy = await loadPolicy(subdomain);
         return {
           subdomain,
           fullName: r.name,

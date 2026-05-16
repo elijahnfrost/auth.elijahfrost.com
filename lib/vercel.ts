@@ -56,18 +56,44 @@ export async function listProjects(): Promise<VercelProject[]> {
   return projects;
 }
 
+async function listDomainsForProject(projectId: string): Promise<string[]> {
+  const url =
+    `${API_BASE}/v9/projects/${encodeURIComponent(projectId)}/domains?${teamParam()}` +
+    `&limit=100`;
+  const res = await fetch(url, { headers: authHeader(), cache: "no-store" });
+  if (!res.ok) return [];
+  const json = (await res.json()) as { domains: Array<{ name: string }> };
+  return json.domains?.map((d) => d.name) ?? [];
+}
+
+/**
+ * Build a domain → projectId map by walking each project's domain list in
+ * parallel. Called once by the admin loader so per-row lookups are O(1).
+ *
+ * Vercel's v10 /domains/<name> endpoint returns parent-domain info (the
+ * apex), not the per-subdomain binding, which is why we materialize the
+ * full map here rather than per-row.
+ */
+export async function buildDomainToProjectMap(): Promise<Map<string, string>> {
+  const projects = await listProjects();
+  const entries = await Promise.all(
+    projects.map(async (p): Promise<Array<[string, string]>> => {
+      const names = await listDomainsForProject(p.id);
+      return names.map((name) => [name, p.id]);
+    }),
+  );
+  return new Map(entries.flat());
+}
+
 /**
  * Find which Vercel project currently owns <domain>. Returns null if the
- * domain isn't attached to any project on this team. Used by the Projects
- * tab to populate the "Vercel project" column.
+ * domain isn't attached to any project on this team. One-off helper used
+ * by the project-remove endpoint; callers issuing many lookups should
+ * build the full map via buildDomainToProjectMap() instead.
  */
 export async function findProjectIdForDomain(domain: string): Promise<string | null> {
-  const url = `${API_BASE}/v10/domains/${encodeURIComponent(domain)}?${teamParam()}`;
-  const res = await fetch(url, { headers: authHeader(), cache: "no-store" });
-  if (res.status === 404) return null;
-  if (!res.ok) return null;
-  const json = (await res.json()) as { domain?: { projectId?: string } };
-  return json.domain?.projectId ?? null;
+  const map = await buildDomainToProjectMap();
+  return map.get(domain) ?? null;
 }
 
 export async function attachDomainToProject(projectId: string, name: string): Promise<void> {
