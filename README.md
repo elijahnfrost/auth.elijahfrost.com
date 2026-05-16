@@ -5,7 +5,7 @@ Centralized password gate for personal projects under `elijahfrost.com`.
 ## Architecture
 
 - This Vercel-hosted Next.js app serves the password form and issues the shared cookie.
-- Protected subdomains (`www`, `slides`, `ankislides`, `projects`, `careertracker`, `musclelabeler`, `pulsetimer`) sit behind a Cloudflare Worker that checks the cookie and redirects here when missing.
+- Protected subdomains (`slides`, `ankislides`, `projects`, `careertracker`, `musclelabeler`, `pulsetimer`) sit behind a Cloudflare Worker that checks the cookie and redirects here when missing. `www` (which serves the public CV) and the apex stay public.
 - One shared password (`SHARED_PASSWORD`) lives encrypted in both Vercel and Cloudflare Workers. The cookie value is `SHA-256(SHARED_PASSWORD)` — deterministic and verifiable from the secret in either environment.
 
 ## Cookie
