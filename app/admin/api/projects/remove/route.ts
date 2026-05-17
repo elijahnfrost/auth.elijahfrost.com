@@ -31,6 +31,25 @@ export async function POST(req: Request) {
 
   const fullName = `${subdomain}.${APEX}`;
 
+  // Tombstone FIRST, before Vercel detach. Detaching a domain in Vercel
+  // queues a project.domain.deleted webhook delivery; if we wrote the
+  // tombstone last, the webhook handler could see Vercel detached + DNS
+  // already deleted (CF replicas vary) and re-enroll the row before our
+  // tombstone landed. Writing first closes that window.
+  //
+  // Partial failures: a tombstone-then-failed-delete leaves the row visible
+  // in the admin list (DNS/KV still there) but blocks webhook auto-
+  // enrollment for ~5min. Admin Add always deletes the tombstone up front,
+  // so the user can recover at any time.
+  let tombstoned = false;
+  try {
+    await writeTombstone(subdomain, "admin-remove");
+    tombstoned = true;
+  } catch {
+    // Non-fatal: the deletes are still the source of truth. We surface
+    // tombstoned:false so the caller knows the webhook race is open.
+  }
+
   let vercelDetached = false;
   let dnsDeleted = false;
   let policyDeleted = false;
@@ -44,7 +63,7 @@ export async function POST(req: Request) {
     vercelDetached = true;
   } catch (e) {
     return new Response(
-      JSON.stringify({ error: "vercel_detach_failed", detail: (e as Error).message, vercelDetached, dnsDeleted, policyDeleted }),
+      JSON.stringify({ error: "vercel_detach_failed", detail: (e as Error).message, tombstoned, vercelDetached, dnsDeleted, policyDeleted }),
       { status: 502 },
     );
   }
@@ -56,7 +75,7 @@ export async function POST(req: Request) {
     dnsDeleted = true;
   } catch (e) {
     return new Response(
-      JSON.stringify({ error: "dns_delete_failed", detail: (e as Error).message, vercelDetached, dnsDeleted, policyDeleted }),
+      JSON.stringify({ error: "dns_delete_failed", detail: (e as Error).message, tombstoned, vercelDetached, dnsDeleted, policyDeleted }),
       { status: 502 },
     );
   }
@@ -67,21 +86,9 @@ export async function POST(req: Request) {
     policyDeleted = true;
   } catch (e) {
     return new Response(
-      JSON.stringify({ error: "kv_policy_delete_failed", detail: (e as Error).message, vercelDetached, dnsDeleted, policyDeleted }),
+      JSON.stringify({ error: "kv_policy_delete_failed", detail: (e as Error).message, tombstoned, vercelDetached, dnsDeleted, policyDeleted }),
       { status: 502 },
     );
-  }
-
-  // 4. Tombstone last: written only when all three deletes succeed, so a
-  // partial-failure Remove cannot block legitimate re-enrollment via the
-  // webhook. Tombstone failures are surfaced but don't fail the call —
-  // the deletes are the source of truth.
-  let tombstoned = false;
-  try {
-    await writeTombstone(subdomain, "admin-remove");
-    tombstoned = true;
-  } catch {
-    // best effort; log via the response field
   }
 
   return new Response(JSON.stringify({ ok: true, tombstoned }), {
