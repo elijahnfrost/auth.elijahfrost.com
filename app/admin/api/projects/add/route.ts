@@ -1,8 +1,6 @@
 import { isAdmin, notAdminResponse } from "@/lib/admin-auth";
-import { savePolicy } from "@/lib/config";
+import { enrollSubdomain } from "@/lib/enroll";
 import { isPolicy, PUBLIC_SUBDOMAINS } from "@/lib/scopes";
-import { APEX, createVercelCname, findDnsRecordByName } from "@/lib/cloudflare-admin";
-import { attachDomainToProject } from "@/lib/vercel";
 
 export const runtime = "edge";
 
@@ -38,55 +36,41 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({ error: "bad_policy" }), { status: 400 });
   }
 
-  const fullName = `${subdomain}.${APEX}`;
-
-  // Fail-fast if DNS already exists. Each subsequent step is best-effort: on
-  // partial failure we report exactly what completed so the admin can finish
-  // by hand rather than have us silently roll back work.
-  const existing = await findDnsRecordByName(subdomain);
-  if (existing) {
+  let result;
+  try {
+    result = await enrollSubdomain({
+      subdomain,
+      intent: { kind: "manual", vercelProjectId },
+      policy,
+      policyOverwrite: true,
+    });
+  } catch (e) {
     return new Response(
-      JSON.stringify({ error: "dns_exists", detail: `${fullName} already has a DNS record` }),
-      { status: 409 },
+      JSON.stringify({ ok: false, error: "enroll_failed", detail: (e as Error).message }),
+      { status: 502, headers: { "Content-Type": "application/json; charset=utf-8" } },
     );
   }
 
-  let dnsCreated = false;
-  let vercelAttached = false;
-  let policySet = false;
-
-  try {
-    await createVercelCname(subdomain);
-    dnsCreated = true;
-  } catch (e) {
+  if (!result.ok && result.conflict) {
     return new Response(
-      JSON.stringify({ error: "dns_failed", detail: (e as Error).message, dnsCreated, vercelAttached, policySet }),
-      { status: 502 },
-    );
-  }
-
-  try {
-    await attachDomainToProject(vercelProjectId, fullName);
-    vercelAttached = true;
-  } catch (e) {
-    return new Response(
-      JSON.stringify({ error: "vercel_attach_failed", detail: (e as Error).message, dnsCreated, vercelAttached, policySet }),
-      { status: 502 },
-    );
-  }
-
-  try {
-    await savePolicy(subdomain, policy);
-    policySet = true;
-  } catch (e) {
-    return new Response(
-      JSON.stringify({ error: "kv_policy_failed", detail: (e as Error).message, dnsCreated, vercelAttached, policySet }),
-      { status: 502 },
+      JSON.stringify({
+        ok: false,
+        step: result.conflict.step,
+        error: result.conflict.error,
+        subdomain: result.subdomain,
+        steps: result.steps,
+      }),
+      { status: 409, headers: { "Content-Type": "application/json; charset=utf-8" } },
     );
   }
 
   return new Response(
-    JSON.stringify({ ok: true, subdomain, vercelProjectId, policy }),
+    JSON.stringify({
+      ok: true,
+      subdomain: result.subdomain,
+      vercelProject: result.vercelProjectName ?? result.vercelProjectId,
+      steps: result.steps,
+    }),
     { status: 200, headers: { "Content-Type": "application/json; charset=utf-8" } },
   );
 }

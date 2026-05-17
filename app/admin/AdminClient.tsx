@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, TextInput } from "@elijahfrost/design-system";
-import { useMemo, useState, useTransition, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, useTransition, type CSSProperties } from "react";
 import {
   CodesMap,
   GrantableScope,
@@ -357,6 +357,31 @@ function ProjectsSection({
   );
 }
 
+interface StepResult {
+  status: "created" | "updated" | "skipped" | "conflict";
+  note?: string;
+  previous?: string;
+  error?: string;
+}
+
+interface AddSteps {
+  dns: StepResult;
+  vercel: StepResult;
+  kv: StepResult;
+}
+
+function describeSummary(sub: string, steps: AddSteps): string {
+  const parts: string[] = [];
+  parts.push(`DNS: ${steps.dns.status}`);
+  parts.push(`Vercel: ${steps.vercel.status}`);
+  if (steps.kv.status === "updated" && steps.kv.previous) {
+    parts.push(`Policy: updated from ${steps.kv.previous}`);
+  } else {
+    parts.push(`Policy: ${steps.kv.status}`);
+  }
+  return `Added ${sub}.elijahfrost.com — ${parts.join(", ")}.`;
+}
+
 function AddProjectForm({
   vercelProjects,
   onAdded,
@@ -364,20 +389,67 @@ function AddProjectForm({
   vercelProjects: VercelProject[] | null;
   onAdded: () => Promise<void>;
 }) {
-  const [subdomain, setSubdomain] = useState("");
   const [projectId, setProjectId] = useState<string>(vercelProjects?.[0]?.id ?? "");
+  const [subdomain, setSubdomain] = useState("");
   const [policy, setPolicy] = useState<Policy>("gated");
   const [state, setState] = useState<SaveState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [prefilled, setPrefilled] = useState(false);
+  const [userEdited, setUserEdited] = useState(false);
+
+  // When the picked Vercel project changes, ask the API which elijahfrost.com
+  // domains are already attached to it. Autofill the subdomain field with the
+  // shortest match (or leave empty if none). We re-fetch on every change so
+  // switching projects re-prefills.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/admin/api/vercel/project-domains?projectId=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as { domains: Array<{ name: string }> };
+        if (cancelled) return;
+        const bareNames = body.domains
+          .map((d) => d.name.replace(/\.elijahfrost\.com$/, ""))
+          .filter((n) => n.length > 0);
+        if (bareNames.length === 0) {
+          setSubdomain("");
+          setPrefilled(false);
+          setUserEdited(false);
+        } else {
+          bareNames.sort((a, b) => a.length - b.length || a.localeCompare(b));
+          setSubdomain(bareNames[0]);
+          setPrefilled(true);
+          setUserEdited(false);
+        }
+      } catch {
+        // ignore — admin can type a subdomain manually
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const normalize = (raw: string) => {
-    const stripped = raw.trim().toLowerCase().replace(/\.elijahfrost\.com$/, "");
-    return stripped;
+    return raw.trim().toLowerCase().replace(/\.elijahfrost\.com$/, "");
+  };
+
+  const onSubdomainInput = (v: string) => {
+    setSubdomain(v);
+    setUserEdited(true);
+    setPrefilled(false);
   };
 
   const submit = async () => {
     const sub = normalize(subdomain);
     setError(null);
+    setSummary(null);
     if (!sub) {
       setError("Subdomain required");
       return;
@@ -393,27 +465,30 @@ function AddProjectForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subdomain: sub, vercelProjectId: projectId, policy }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as {
-          error?: string;
-          detail?: string;
-          dnsCreated?: boolean;
-          vercelAttached?: boolean;
-          policySet?: boolean;
-        };
-        let msg = body.detail ?? body.error ?? `status ${res.status}`;
-        if (body.dnsCreated || body.vercelAttached || body.policySet) {
-          msg += ` (partial: dns=${body.dnsCreated ? "✓" : "✗"} vercel=${
-            body.vercelAttached ? "✓" : "✗"
-          } policy=${body.policySet ? "✓" : "✗"})`;
-        }
-        throw new Error(msg);
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        detail?: string;
+        step?: string;
+        steps?: AddSteps;
+      };
+      if (!res.ok || !body.ok) {
+        const stepPrefix = body.step ? `[${body.step}] ` : "";
+        const msg = body.detail ?? body.error ?? `status ${res.status}`;
+        throw new Error(`${stepPrefix}${msg}`);
+      }
+      if (body.steps) {
+        setSummary(describeSummary(sub, body.steps));
+      } else {
+        setSummary(`Added ${sub}.elijahfrost.com.`);
       }
       setSubdomain("");
+      setPrefilled(false);
+      setUserEdited(false);
       setPolicy("gated");
       setState("saved");
       await onAdded();
-      setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 2000);
+      setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 4000);
     } catch (e) {
       setState("error");
       setError((e as Error).message);
@@ -438,21 +513,11 @@ function AddProjectForm({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(160px, 1.2fr) minmax(160px, 1fr) minmax(140px, 1fr) auto",
+            gridTemplateColumns: "minmax(160px, 1fr) minmax(160px, 1.2fr) minmax(140px, 1fr) auto",
             gap: "0.75rem",
             alignItems: "start",
           }}
         >
-          <div>
-            <TextInput
-              placeholder="subdomain"
-              value={subdomain}
-              onChange={(e) => setSubdomain(e.target.value)}
-            />
-            <p style={descriptionStyle}>
-              becomes <code>{normalize(subdomain) || "<sub>"}.elijahfrost.com</code>
-            </p>
-          </div>
           <div>
             <StyledSelect<string>
               options={vercelProjects.map((p) => ({ value: p.id, label: p.name }))}
@@ -460,6 +525,22 @@ function AddProjectForm({
               onValueChange={setProjectId}
             />
             <p style={descriptionStyle}>Vercel project to bind the domain to.</p>
+          </div>
+          <div>
+            <TextInput
+              placeholder="subdomain"
+              value={subdomain}
+              onChange={(e) => onSubdomainInput(e.target.value)}
+            />
+            <p style={descriptionStyle}>
+              {prefilled && !userEdited
+                ? "Pre-filled from Vercel project (editable)."
+                : (
+                  <>
+                    becomes <code>{normalize(subdomain) || "<sub>"}.elijahfrost.com</code>
+                  </>
+                )}
+            </p>
           </div>
           <div>
             <StyledSelect<Policy>
@@ -479,9 +560,9 @@ function AddProjectForm({
         </div>
       )}
       {error ? <p style={{ ...errorTextStyle, marginTop: "0.75rem" }}>{error}</p> : null}
-      {state === "saved" ? (
-        <p style={{ fontSize: 12, color: "var(--color-fg-muted)", marginTop: "0.5rem" }}>
-          Added. DNS propagation + Vercel TLS provisioning may take a minute.
+      {summary ? (
+        <p style={{ fontSize: 12, color: "var(--color-fg-muted)", marginTop: "0.75rem" }}>
+          {summary}
         </p>
       ) : null}
     </div>
