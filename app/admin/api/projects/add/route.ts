@@ -1,4 +1,5 @@
 import { isAdmin, notAdminResponse } from "@/lib/admin-auth";
+import { deleteTombstone } from "@/lib/config";
 import { enrollSubdomain } from "@/lib/enroll";
 import { isPolicy, PUBLIC_SUBDOMAINS } from "@/lib/scopes";
 
@@ -34,6 +35,15 @@ export async function POST(req: Request) {
   }
   if (!isPolicy(policy)) {
     return new Response(JSON.stringify({ error: "bad_policy" }), { status: 400 });
+  }
+
+  // Manual re-add explicitly overrides any active tombstone. Idempotent
+  // (404 -> success); a tombstone may not exist on the first add. Done
+  // before enroll so the webhook can't race in during the add itself.
+  try {
+    await deleteTombstone(subdomain);
+  } catch {
+    // non-fatal: tombstone is a hint, not a gate, on the admin path
   }
 
   let result;

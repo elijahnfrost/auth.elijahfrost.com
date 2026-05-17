@@ -38,8 +38,18 @@ export async function kvGet(key: string): Promise<string | null> {
   return await res.text();
 }
 
-export async function kvPut(key: string, value: string): Promise<void> {
-  const res = await fetch(namespaceUrl(key), {
+export async function kvPut(
+  key: string,
+  value: string,
+  opts?: { ttlSeconds?: number },
+): Promise<void> {
+  // CF's single-key PUT accepts `?expiration_ttl=<seconds>` for relative TTL.
+  // Minimum supported TTL is 60 seconds (silently rounded by CF otherwise).
+  const base = namespaceUrl(key);
+  const url = opts?.ttlSeconds && opts.ttlSeconds > 0
+    ? `${base}?expiration_ttl=${Math.max(60, Math.floor(opts.ttlSeconds))}`
+    : base;
+  const res = await fetch(url, {
     method: "PUT",
     headers: {
       ...authHeader(),
@@ -49,6 +59,31 @@ export async function kvPut(key: string, value: string): Promise<void> {
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`kvPut(${key}) failed: ${res.status}`);
+}
+
+export interface KvKeyInfo {
+  name: string;
+  // Unix seconds when CF will purge the key; undefined if no TTL.
+  expiration?: number;
+}
+
+/**
+ * List keys matching an optional prefix. Used by the tombstone debug endpoint
+ * to surface remaining TTLs.
+ */
+export async function kvListKeys(prefix?: string): Promise<KvKeyInfo[]> {
+  const account = envOrThrow("CLOUDFLARE_ACCOUNT_ID");
+  const ns = envOrThrow("CLOUDFLARE_KV_NAMESPACE_ID");
+  const url = new URL(`${API_BASE}/accounts/${account}/storage/kv/namespaces/${ns}/keys`);
+  if (prefix) url.searchParams.set("prefix", prefix);
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: authHeader(),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`kvListKeys failed: ${res.status}`);
+  const body = (await res.json()) as { result?: KvKeyInfo[] };
+  return body.result ?? [];
 }
 
 export async function kvDelete(key: string): Promise<void> {

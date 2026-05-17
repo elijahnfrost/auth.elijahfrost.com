@@ -6,7 +6,7 @@
 // on unavailable config and the Vercel app does the same for any path that
 // strictly requires a codes lookup.
 
-import { kvDelete, kvGet, kvPut } from "./kv";
+import { kvDelete, kvGet, kvListKeys, kvPut } from "./kv";
 import {
   CodesMap,
   GrantableScope,
@@ -81,6 +81,83 @@ export async function savePolicy(subdomain: string, policy: Policy): Promise<voi
 
 export async function deletePolicy(subdomain: string): Promise<void> {
   await kvDelete(`policy:${subdomain}`);
+}
+
+// --- Tombstones --------------------------------------------------------------
+//
+// When admin Remove finishes deleting a subdomain (Vercel detach, DNS delete,
+// KV policy delete), it writes `removed:<sub>` with a 300s TTL. The webhook
+// handler checks this before enrolling, so a `project.domain.deleted` event
+// arriving moments after Remove cannot resurrect the row.
+//
+// The TTL is long enough to cover Vercel's webhook retries (a few minutes)
+// and short enough that a legitimate manual re-add after that window does
+// not need explicit cleanup — though /admin/api/projects/add deletes the
+// tombstone up front for instant re-enrollment.
+
+export const TOMBSTONE_TTL_SECONDS = 300;
+const TOMBSTONE_PREFIX = "removed:";
+
+export interface Tombstone {
+  ts: number;
+  source: string;
+}
+
+export async function writeTombstone(subdomain: string, source: string): Promise<void> {
+  const value: Tombstone = { ts: Date.now(), source };
+  await kvPut(`${TOMBSTONE_PREFIX}${subdomain}`, JSON.stringify(value), {
+    ttlSeconds: TOMBSTONE_TTL_SECONDS,
+  });
+}
+
+export async function readTombstone(subdomain: string): Promise<Tombstone | null> {
+  let raw: string | null;
+  try {
+    raw = await kvGet(`${TOMBSTONE_PREFIX}${subdomain}`);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object") {
+      const p = parsed as { ts?: unknown; source?: unknown };
+      if (typeof p.ts === "number" && typeof p.source === "string") {
+        return { ts: p.ts, source: p.source };
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+export async function deleteTombstone(subdomain: string): Promise<void> {
+  await kvDelete(`${TOMBSTONE_PREFIX}${subdomain}`);
+}
+
+export interface TombstoneInfo {
+  subdomain: string;
+  expiration: number | null;
+  remainingSeconds: number | null;
+}
+
+export async function listTombstones(): Promise<TombstoneInfo[]> {
+  const keys = await kvListKeys(TOMBSTONE_PREFIX);
+  const nowSec = Math.floor(Date.now() / 1000);
+  return keys
+    .map((k) => {
+      const sub = k.name.startsWith(TOMBSTONE_PREFIX)
+        ? k.name.slice(TOMBSTONE_PREFIX.length)
+        : k.name;
+      const exp = typeof k.expiration === "number" ? k.expiration : null;
+      return {
+        subdomain: sub,
+        expiration: exp,
+        remainingSeconds: exp != null ? Math.max(0, exp - nowSec) : null,
+      };
+    })
+    .sort((a, b) => a.subdomain.localeCompare(b.subdomain));
 }
 
 /**

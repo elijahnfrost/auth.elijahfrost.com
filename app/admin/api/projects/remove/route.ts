@@ -1,5 +1,5 @@
 import { isAdmin, notAdminResponse } from "@/lib/admin-auth";
-import { deletePolicy } from "@/lib/config";
+import { deletePolicy, writeTombstone } from "@/lib/config";
 import { PUBLIC_SUBDOMAINS } from "@/lib/scopes";
 import {
   APEX,
@@ -72,7 +72,19 @@ export async function POST(req: Request) {
     );
   }
 
-  return new Response(JSON.stringify({ ok: true }), {
+  // 4. Tombstone last: written only when all three deletes succeed, so a
+  // partial-failure Remove cannot block legitimate re-enrollment via the
+  // webhook. Tombstone failures are surfaced but don't fail the call —
+  // the deletes are the source of truth.
+  let tombstoned = false;
+  try {
+    await writeTombstone(subdomain, "admin-remove");
+    tombstoned = true;
+  } catch {
+    // best effort; log via the response field
+  }
+
+  return new Response(JSON.stringify({ ok: true, tombstoned }), {
     status: 200,
     headers: { "Content-Type": "application/json; charset=utf-8" },
   });

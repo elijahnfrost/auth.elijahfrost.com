@@ -18,6 +18,7 @@
 
 import { enrollSubdomain } from "@/lib/enroll";
 import { APEX } from "@/lib/cloudflare-admin";
+import { readTombstone } from "@/lib/config";
 
 export const runtime = "edge";
 
@@ -92,6 +93,14 @@ interface EnrolledLog {
   previous?: string;
 }
 
+interface TombstonedLog {
+  subdomain: string;
+  status: "tombstoned";
+  reason: string;
+}
+
+type SkippedLog = EnrolledLog | TombstonedLog;
+
 export async function POST(req: Request) {
   // Fail closed on any unauthenticated request. Missing secret on the server
   // is also treated as "cannot verify" -> 401 so external callers can't
@@ -136,11 +145,24 @@ export async function POST(req: Request) {
   }
 
   const enrolled: EnrolledLog[] = [];
-  const skipped: EnrolledLog[] = [];
+  const skipped: SkippedLog[] = [];
   const errors: Array<{ subdomain: string; error: string; step?: string }> = [];
 
   for (const sub of candidates) {
     try {
+      // Tombstone check: if admin Remove recently deleted this subdomain we
+      // refuse to re-enroll it for the TTL window, so a late-arriving
+      // `project.domain.deleted` (or a Vercel retry) can't resurrect it.
+      const tomb = await readTombstone(sub);
+      if (tomb) {
+        skipped.push({
+          subdomain: sub,
+          status: "tombstoned",
+          reason: "recently removed",
+        });
+        continue;
+      }
+
       const result = await enrollSubdomain({
         subdomain: sub,
         intent: { kind: "webhook" },
