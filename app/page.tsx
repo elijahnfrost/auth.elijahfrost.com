@@ -3,6 +3,7 @@ import { Button, TextInput } from "@elijahfrost/design-system";
 import { COOKIE_NAME } from "@/lib/cookie";
 import { scopeForCookieValue } from "@/lib/config";
 import { sanitizeNext } from "@/lib/next-url";
+import { GrantableScope, SCOPE_DESCRIPTIONS } from "@/lib/scopes";
 
 type SearchParams = Promise<{ next?: string; error?: string }>;
 
@@ -67,7 +68,7 @@ export default async function RootPage({ searchParams }: { searchParams: SearchP
         </p>
 
         {isAuthed ? (
-          <SignedInPanel scope={scope} />
+          <SignedInPanel scope={scope as GrantableScope} />
         ) : (
           <SignedOutPanel next={next} error={error} />
         )}
@@ -135,35 +136,50 @@ function SignedOutPanel({ next, error }: { next: string; error: boolean }) {
   );
 }
 
-function SignedInPanel({ scope }: { scope: string }) {
+function SignedInPanel({ scope }: { scope: GrantableScope }) {
+  const isAdmin = scope === "admin";
   return (
     <div style={{ marginTop: "2rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-      <p
-        style={{
-          fontSize: "0.95rem",
-          color: "var(--color-fg)",
-          margin: 0,
-        }}
-      >
-        Signed in as <strong>{scope}</strong>.
-      </p>
+      <div>
+        <p
+          style={{
+            fontSize: "0.95rem",
+            color: "var(--color-fg)",
+            margin: 0,
+          }}
+        >
+          Signed in as <strong>{scope}</strong>.
+        </p>
+        <p
+          style={{
+            marginTop: "0.35rem",
+            fontSize: 12,
+            color: "var(--color-fg-muted)",
+            lineHeight: 1.4,
+          }}
+        >
+          {SCOPE_DESCRIPTIONS[scope]}
+        </p>
+      </div>
 
-      <a
-        href="/admin"
-        style={{
-          display: "block",
-          textDecoration: "none",
-          textAlign: "center",
-          padding: "0.75rem 1rem",
-          fontSize: "0.875rem",
-          fontFamily: "inherit",
-          background: "var(--color-fg)",
-          color: "var(--color-bg-page)",
-          borderRadius: 0,
-        }}
-      >
-        Open admin panel
-      </a>
+      {isAdmin ? (
+        <a
+          href="/admin"
+          style={{
+            display: "block",
+            textDecoration: "none",
+            textAlign: "center",
+            padding: "0.75rem 1rem",
+            fontSize: "0.875rem",
+            fontFamily: "inherit",
+            background: "var(--color-fg)",
+            color: "var(--color-bg-page)",
+            borderRadius: 0,
+          }}
+        >
+          Open admin panel
+        </a>
+      ) : null}
 
       <form method="post" action="/api/logout" style={{ margin: 0 }}>
         <button
