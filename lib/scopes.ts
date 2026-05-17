@@ -34,6 +34,31 @@ export const POLICY_DESCRIPTIONS: Record<Policy, string> = {
   locked: "Only the admin code grants access.",
 };
 
+// Minimum scope a visitor needs to *view* a subdomain under each policy.
+// public / public-read pass to the destination without auth at all (the
+// Worker doesn't bounce them here); we still return "read" as a floor so
+// callers that route through the auth page can render meaningful copy.
+export type MinScope = GrantableScope;
+
+export function minScopeForPolicy(policy: Policy | null | undefined): MinScope {
+  switch (policy) {
+    case "public":
+    case "public-read":
+    case "gated":
+      return "read";
+    case "gated-write":
+      return "write";
+    case "locked":
+      return "admin";
+    default:
+      return "read";
+  }
+}
+
+export function scopeSatisfies(actual: Scope, required: MinScope): boolean {
+  return SCOPE_RANK[actual] >= SCOPE_RANK[required];
+}
+
 // Public subdomains we never gate. The Projects tab filters these out of the
 // editable policy list since flipping them to gated would lock out everyone,
 // including the admin sign-in path.

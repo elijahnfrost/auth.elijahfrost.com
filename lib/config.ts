@@ -63,15 +63,27 @@ export async function saveCodes(map: CodesMap): Promise<void> {
   await kvPut("codes", JSON.stringify(map));
 }
 
+// Per-isolate cache; matches the Worker's 30s cache so the auth page and
+// the gate read the same policy value within a hot window. Cache misses
+// fall through to KV. A missing or errored read defaults to "gated", which
+// is also cached so we don't hammer KV on truly-unconfigured subdomains.
+const POLICY_CACHE = new Map<string, { policy: Policy; expiresAt: number }>();
+const POLICY_TTL_MS = 30_000;
+
 export async function loadPolicy(subdomain: string): Promise<Policy> {
+  const now = Date.now();
+  const cached = POLICY_CACHE.get(subdomain);
+  if (cached && cached.expiresAt > now) return cached.policy;
+
+  let policy: Policy = "gated";
   try {
     const raw = await kvGet(`policy:${subdomain}`);
-    if (raw && isPolicy(raw)) return raw;
+    if (raw && isPolicy(raw)) policy = raw;
   } catch {
-    // A missing specific policy is benign; a transient KV error here
-    // shouldn't take down /admin rendering.
+    // transient KV error or missing key; default already set
   }
-  return "gated";
+  POLICY_CACHE.set(subdomain, { policy, expiresAt: now + POLICY_TTL_MS });
+  return policy;
 }
 
 export async function savePolicy(subdomain: string, policy: Policy): Promise<void> {
