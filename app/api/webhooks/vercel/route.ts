@@ -93,15 +93,14 @@ interface EnrolledLog {
 }
 
 export async function POST(req: Request) {
+  // Fail closed on any unauthenticated request. Missing secret on the server
+  // is also treated as "cannot verify" -> 401 so external callers can't
+  // distinguish that case from a normal signature mismatch.
   const secret = process.env.VERCEL_WEBHOOK_SECRET;
-  if (!secret) {
-    console.warn("[webhooks/vercel] missing VERCEL_WEBHOOK_SECRET");
-    return new Response("missing secret", { status: 500 });
-  }
-
   const sigHeader = req.headers.get(SIGNATURE_HEADER);
-  if (!sigHeader) {
-    console.warn("[webhooks/vercel] missing signature header");
+  if (!secret || !sigHeader) {
+    if (!secret) console.warn("[webhooks/vercel] missing VERCEL_WEBHOOK_SECRET");
+    if (!sigHeader) console.warn("[webhooks/vercel] missing signature header");
     return new Response("invalid signature", { status: 401 });
   }
 
