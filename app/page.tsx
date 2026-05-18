@@ -250,27 +250,6 @@ function SignedOutPanel({
         </Button>
       </form>
 
-      <a
-        href="/admin"
-        style={{
-          display: "block",
-          marginTop: "1rem",
-          textDecoration: "none",
-          textAlign: "center",
-          padding: "0.625rem 1rem",
-          fontSize: "0.875rem",
-          fontFamily: "inherit",
-          letterSpacing: "var(--tracking-display-eyebrow)",
-          textTransform: "uppercase",
-          color: "var(--color-fg-muted)",
-          border: "1px solid var(--color-border)",
-          borderRadius: 0,
-          background: "transparent",
-        }}
-      >
-        Administrator sign in
-      </a>
-
       {rawNext ? <CancelLink style={{ ...tertiaryLinkStyle, marginTop: "1rem" }} /> : null}
     </>
   );

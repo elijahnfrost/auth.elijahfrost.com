@@ -37,7 +37,11 @@ export async function POST(req: Request) {
 
   // Cookie value is the hash of whichever password the visitor used. The
   // Worker looks the cookie up in the codes map to determine effective scope.
-  const res = NextResponse.redirect(next, { status: 303 });
+  // Bounce through /signing-in so the visitor sees a brief confirmation of
+  // which scope they signed in as before being handed off to the destination.
+  const handoff = new URL("/signing-in", req.url);
+  handoff.searchParams.set("next", next);
+  const res = NextResponse.redirect(handoff, { status: 303 });
   res.cookies.set({
     name: COOKIE_NAME,
     value: submittedHash,
